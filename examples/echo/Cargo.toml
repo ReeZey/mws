@@ -1,0 +1,8 @@
+[package]
+name = "echo-mws"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mws = { path = "../../" }
+tokio = { version = "1.40", features = ["macros", "io-util"] }
