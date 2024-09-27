@@ -128,14 +128,15 @@ async fn read_line(stream: &mut TcpStream) -> Result<String, Error> {
             _ => str.push(byte as char),
         }
     }
+    format_response("405 Method Not Allowed");
     return Ok(str);
 }
 
-pub fn get_real_ip(request: &Request, headers: Option<Vec<impl AsRef<String>>>) -> String {
+pub fn get_real_ip(request: &Request, headers: Option<Vec<impl Into<String>>>) -> String {
     if let Some(headers) = headers {
-        for key in headers {
-            if request.headers.contains_key(key.as_ref()) {
-                return request.headers.get(key.as_ref()).unwrap().to_string();
+        for key in headers.into_iter().map(|x| x.into()) {
+            if let Some(real_ip) = request.headers.get(&key) {
+                return real_ip.to_string();
             }
         }
     }
@@ -145,14 +146,14 @@ pub fn get_real_ip(request: &Request, headers: Option<Vec<impl AsRef<String>>>) 
     request.stream.peer_addr().unwrap().ip().to_string()
 }
 
-pub fn format_response(status: impl AsRef<String>) -> Vec<u8> {
-    format!("HTTP/1.1 {}\r\nContent-Length: 0\r\n\r\n", status.as_ref()).into_bytes()
+pub fn format_response(status: impl Into<String>) -> Vec<u8> {
+    format!("HTTP/1.1 {}\r\nContent-Length: 0\r\n\r\n", status.into()).into_bytes()
 }
 
-pub fn format_response_with_body(status: impl AsRef<String>, body: Vec<u8>) -> Vec<u8> {
+pub fn format_response_with_body(status: impl Into<String>, body: Vec<u8>) -> Vec<u8> {
     let mut response = format!(
         "HTTP/1.1 {}\r\nContent-Length: {}\r\n\r\n",
-        status.as_ref(),
+        status.into(),
         body.len()
     ).into_bytes();
     response.extend(body);
