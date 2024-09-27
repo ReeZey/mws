@@ -131,16 +131,31 @@ async fn read_line(stream: &mut TcpStream) -> Result<String, Error> {
     return Ok(str);
 }
 
-pub fn get_real_ip(request: &Request, headers: Option<Vec<String>>) -> String {
+pub fn get_real_ip(request: &Request, headers: Option<Vec<impl AsRef<String>>>) -> String {
     if let Some(headers) = headers {
         for key in headers {
-            if request.headers.contains_key(&key) {
-                return request.headers.get(&key).unwrap().to_string();
+            if request.headers.contains_key(key.as_ref()) {
+                return request.headers.get(key.as_ref()).unwrap().to_string();
             }
         }
     }
-    if request.headers.contains_key("X-Real-IP") {
-        return request.headers.get("X-Real-IP").unwrap().to_string();
+    if let Some(real_ip) = request.headers.get("X-Real-IP")  {
+        return real_ip.to_string();
     }
     request.stream.peer_addr().unwrap().ip().to_string()
+}
+
+pub fn format_response(status: impl AsRef<String>) -> Vec<u8> {
+    format!("HTTP/1.1 {}\r\nContent-Length: 0\r\n\r\n", status.as_ref()).into_bytes()
+}
+
+pub fn format_response_with_body(status: impl AsRef<String>, body: Vec<u8>) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 {}\r\nContent-Length: {}\r\n\r\n",
+        status.as_ref(),
+        body.len()
+    ).into_bytes();
+    response.extend(body);
+
+    response
 }
