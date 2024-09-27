@@ -1,4 +1,4 @@
-use mws::{ Request, WebServer };
+use mws::{Request, WebServer};
 use tokio::io::AsyncWriteExt;
 
 #[tokio::main]
@@ -8,15 +8,15 @@ async fn main() {
             println!("> {}", mws::get_real_ip(&request, None));
 
             let request_parsed = format!("{:#?}", request);
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                request_parsed.len(),
-                request_parsed
-            );
-
-            request.stream.write_all(response.as_bytes()).await.unwrap();
+            request.stream.write_all(
+                format_response_with_body(
+                    "200 OK",
+                    request_parsed.into_bytes(),
+                )
+            ).await.unwrap();
         });
-    }).await;
+    })
+    .await;
 
     server.run().await;
 }
