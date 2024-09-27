@@ -132,10 +132,10 @@ async fn read_line(stream: &mut TcpStream) -> Result<String, Error> {
     return Ok(str);
 }
 
-pub fn get_real_ip(request: &Request, headers: Option<Vec<impl Into<String>>>) -> String {
+pub fn get_real_ip<'a>(request: &Request, headers: Option<Vec<&'a str>>) -> String {
     if let Some(headers) = headers {
-        for key in headers.into_iter().map(|x| x.into()) {
-            if let Some(real_ip) = request.headers.get(&key) {
+        for key in headers {
+            if let Some(real_ip) = request.headers.get(key) {
                 return real_ip.to_string();
             }
         }
