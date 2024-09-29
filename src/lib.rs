@@ -128,7 +128,6 @@ async fn read_line(stream: &mut TcpStream) -> Result<String, Error> {
             _ => str.push(byte as char),
         }
     }
-    format_response("405 Method Not Allowed");
     return Ok(str);
 }
 
@@ -150,7 +149,8 @@ pub fn format_response(status: impl Into<String>) -> Vec<u8> {
     format!("HTTP/1.1 {}\r\nContent-Length: 0\r\n\r\n", status.into()).into_bytes()
 }
 
-pub fn format_response_with_body(status: impl Into<String>, body: Vec<u8>) -> Vec<u8> {
+pub fn format_response_with_body(status: impl Into<String>, body: impl Into<Vec<u8>>) -> Vec<u8> {
+    let body = body.into();
     let mut response = format!(
         "HTTP/1.1 {}\r\nContent-Length: {}\r\n\r\n",
         status.into(),
