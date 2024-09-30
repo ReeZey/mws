@@ -3,9 +3,9 @@ use tokio::io::AsyncWriteExt;
 
 #[tokio::main]
 async fn main() {
-    let server = WebServer::new(true);
+    let server = WebServer::new("0.0.0.0", 80, true);
 
-    server.listen("0.0.0.0", 80, |mut request: Request| async move {
+    server.listen(|mut request: Request| async move {
         println!("> {}", request.get_real_ip(None));
 
         let request_parsed = format!("{:#?}", request);

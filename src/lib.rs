@@ -6,28 +6,32 @@ use std::{
 };
 use html::Status;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
 use utils::{format_response, read_line};
 
 pub struct WebServer {
+    host: String,
+    port: u16,
     verbose: bool,
 }
 
 impl WebServer {
-    pub fn new(verbose: bool) -> Self {
+    pub fn new(host: impl Into<String>, port: u16, verbose: bool) -> Self {
         WebServer {
+            host: host.into(),
+            port,
             verbose,
         }
     }
 
-    pub async fn listen<F, Fut>(&self, host: &str, port: u16, on_request: F)
+    pub async fn listen<F, Fut>(&self, on_request: F)
     where
         F: Fn(Request) -> Fut + Send + Sync + Copy + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let listener = TcpListener::bind(format!("{}:{}", host, port))
+        let listener = TcpListener::bind(format!("{}:{}", self.host, self.port))
             .await
             .unwrap();
         let verbose = self.verbose;
@@ -114,43 +118,23 @@ async fn handle_client(mut stream: TcpStream) -> Result<Request, RequestError> {
         headers.insert(k.to_string(), v.to_string());
     }
 
-    let mut body = Vec::new();
-    if headers.contains_key("Content-Length") {
-        let content_length = headers
-            .get("Content-Length")
-            .unwrap()
-            .parse::<usize>()
-            .unwrap();
-        let mut buffer = vec![0; content_length];
-        match stream.read_exact(&mut buffer).await {
-            Ok(_) => (),
-            Err(error) => {
-                return Err(RequestError { stream, error });
-            }
-        }
-        body = buffer;
-    }
-
     Ok(Request {
         stream,
         method: method.to_string(),
         path: PathBuf::from(path),
         version: version.to_string(),
         headers,
-        body,
     })
 }
 
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Request {
-    pub stream: TcpStream,
-    
     pub method: String,
     pub path: PathBuf,
     pub version: String,
     
-    pub body: Vec<u8>,
+    pub stream: TcpStream,
 
     pub headers: HashMap<String, String>,
 }
