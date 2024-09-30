@@ -1,22 +1,19 @@
-use mws::{Request, WebServer};
+use mws::{html::Status, utils, Request, WebServer};
 use tokio::io::AsyncWriteExt;
 
 #[tokio::main]
 async fn main() {
-    let server = WebServer::new("0.0.0.0", 80, |mut request: Request| {
-        tokio::spawn(async move {
-            println!("> {}", mws::get_real_ip(&request, None));
+    let server = WebServer::new(true);
 
-            let request_parsed = format!("{:#?}", request);
-            request.stream.write_all(
-                format_response_with_body(
-                    "200 OK",
-                    request_parsed.into_bytes(),
-                )
-            ).await.unwrap();
-        });
-    })
-    .await;
+    server.listen("0.0.0.0", 80, |mut request: Request| async move {
+        println!("> {}", request.get_real_ip(None));
 
-    server.run().await;
+        let request_parsed = format!("{:#?}", request);
+        request.stream.write_all(
+            &utils::format_response_with_body(
+                Status::OK,
+                request_parsed,
+            )
+        ).await.unwrap();
+    }).await;
 }

@@ -1,83 +1,118 @@
+pub mod html;
+pub mod utils;
+
 use std::{
-    collections::HashMap,
-    io::{Error, ErrorKind},
-    path::PathBuf,
-    sync::{Arc, Mutex},
+    collections::HashMap, future::Future, io::{Error, ErrorKind}, path::PathBuf, time::Duration
 };
+use html::Status;
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
+use utils::{format_response, read_line};
 
 pub struct WebServer {
-    listener: TcpListener,
-    on_request: Arc<Mutex<dyn Fn(Request) + Send + Sync>>,
+    verbose: bool,
 }
 
 impl WebServer {
-    pub async fn new<F>(host: &str, port: u16, on_request: F) -> WebServer
+    pub fn new(verbose: bool) -> Self {
+        WebServer {
+            verbose,
+        }
+    }
+
+    pub async fn listen<F, Fut>(&self, host: &str, port: u16, on_request: F)
     where
-        F: Fn(Request) + Send + Sync + 'static,
+        F: Fn(Request) -> Fut + Send + Sync + Copy + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         let listener = TcpListener::bind(format!("{}:{}", host, port))
             .await
             .unwrap();
-
-        WebServer {
-            listener,
-            on_request: Arc::new(Mutex::new(on_request)),
-        }
-    }
-
-    pub async fn run(&self) {
+        let verbose = self.verbose;
         loop {
-            let client = self.listener.accept().await;
+            let (stream, _addr) = listener.accept().await.unwrap();
 
-            let request_handle = tokio::spawn(async move {
-                let (stream, _addr) = client.unwrap();
+            let result = tokio::time::timeout(Duration::from_secs(60), tokio::spawn(async move {
+                let request = match handle_client(stream).await {
+                    Ok(request) => request,
+                    Err(mut err) => {
+                        if verbose {
+                            eprintln!("could not handle request: {:?}", err.error);
+                        }
+                        err.stream.write_all(&format_response(Status::InternalServerError)).await.unwrap();
+                        return;
+                    }
+                };
+    
+                on_request(request).await;
+            }));
 
-                handle_client(stream)
-            });
-
-            match request_handle.await.unwrap().await {
-                Ok(request) => {
-                    let on_request = self.on_request.lock().unwrap();
-                    on_request(request);
-                }
-                Err(e) => {
-                    println!("Error: {:?}", e);
+            if let Err(_) = result.await {
+                if verbose {
+                    eprintln!("connection took too long time to process and was terminated [60s]"); 
                 }
             }
         }
     }
 }
 
-async fn handle_client(mut stream: TcpStream) -> Result<Request, Error> {
-    let inital_line = read_line(&mut stream).await?;
-    let (method, right) = inital_line
-        .split_once(" ")
-        .ok_or(Error::new(ErrorKind::InvalidData, "Could not parse method"))?;
-    let (path, version) = right.rsplit_once(" ").ok_or(Error::new(
-        ErrorKind::InvalidData,
-        "Could not parse path and version",
-    ))?;
-    //println!("{} {} {}", method, path, version);
+async fn handle_client(mut stream: TcpStream) -> Result<Request, RequestError> {
+    let inital_line = match read_line(&mut stream).await {
+        Ok(inital_line) => inital_line,
+        Err(error) => {
+            return Err(RequestError { 
+                stream, 
+                error 
+            });
+        }
+    };
+
+    let (method, right) = match inital_line.split_once(" ") {
+        Some((method, right)) => (method, right),
+        None => {
+            return Err(RequestError {
+                stream,
+                error: Error::new(ErrorKind::InvalidData, "could not parse method"),
+            });
+        }
+    };
+
+    let (path, version) = match right.rsplit_once(" ") {
+        Some((path, version)) => (path, version),
+        None => {
+            return Err(RequestError {
+                stream,
+                error: Error::new(ErrorKind::InvalidData, "could not parse path and version"),
+            });
+        }
+    };
 
     let mut headers = HashMap::new();
     loop {
-        let current_header = read_line(&mut stream).await?;
+        let current_header = match read_line(&mut stream).await {
+            Ok(current_header) => current_header,
+            Err(error) => {
+                return Err(RequestError { stream, error });
+            }
+        };
 
         if current_header.len() == 0 {
             break;
         }
 
-        let (k, v) = current_header.split_once(": ").ok_or(Error::new(
-            ErrorKind::InvalidData,
-            "Could not parse headers",
-        ))?;
+        let (k, v) = match current_header.split_once(": ") {
+            Some((k, v)) => (k, v),
+            None => {
+                return Err(RequestError {
+                    stream,
+                    error: Error::new(ErrorKind::InvalidData, format!("could not parse header [{}]", current_header)),
+                });
+            }
+        };
         headers.insert(k.to_string(), v.to_string());
     }
-    //println!("{:#?}", headers);
 
     let mut body = Vec::new();
     if headers.contains_key("Content-Length") {
@@ -87,7 +122,12 @@ async fn handle_client(mut stream: TcpStream) -> Result<Request, Error> {
             .parse::<usize>()
             .unwrap();
         let mut buffer = vec![0; content_length];
-        stream.read_exact(&mut buffer).await?;
+        match stream.read_exact(&mut buffer).await {
+            Ok(_) => (),
+            Err(error) => {
+                return Err(RequestError { stream, error });
+            }
+        }
         body = buffer;
     }
 
@@ -105,58 +145,49 @@ async fn handle_client(mut stream: TcpStream) -> Result<Request, Error> {
 #[derive(Debug)]
 pub struct Request {
     pub stream: TcpStream,
-
+    
     pub method: String,
     pub path: PathBuf,
     pub version: String,
+    
+    pub body: Vec<u8>,
 
     pub headers: HashMap<String, String>,
-
-    pub body: Vec<u8>,
 }
 
-async fn read_line(stream: &mut TcpStream) -> Result<String, Error> {
-    let mut str: String = String::new();
-    loop {
-        let byte = stream.read_u8().await?;
-
-        match byte {
-            b'\r' => {
-                stream.read_u8().await?;
-                break;
-            }
-            _ => str.push(byte as char),
-        }
-    }
-    return Ok(str);
+pub struct RequestError {
+    pub stream: TcpStream,
+    pub error: Error,
 }
 
-pub fn get_real_ip<'a>(request: &Request, headers: Option<Vec<&'a str>>) -> String {
-    if let Some(headers) = headers {
-        for key in headers {
-            if let Some(real_ip) = request.headers.get(key) {
-                return real_ip.to_string();
+impl Request {
+    pub fn get_header(&self, key: &str) -> Option<String> {
+        for (k, v) in &self.headers {
+            if k.to_lowercase() == key.to_lowercase() {
+                return Some(v.to_string());
             }
         }
+        return None;
     }
-    if let Some(real_ip) = request.headers.get("X-Real-IP")  {
-        return real_ip.to_string();
+
+    pub fn get_real_ip(&self, headers: Option<Vec<&str>>) -> String {
+        if let Some(headers) = headers {
+            for key in headers {
+                if let Some(real_ip) = self.headers.get(key) {
+                    return real_ip.to_string();
+                }
+            }
+        }
+
+        //Cloudflare
+        if let Some(real_ip) = self.get_header("cf-connecting-ip")  {
+            return real_ip;
+        }
+        
+        if let Some(real_ip) = self.get_header("X-Real-IP")  {
+            return real_ip;
+        }
+
+        self.stream.peer_addr().unwrap().ip().to_string()
     }
-    request.stream.peer_addr().unwrap().ip().to_string()
-}
-
-pub fn format_response(status: impl Into<String>) -> Vec<u8> {
-    format!("HTTP/1.1 {}\r\nContent-Length: 0\r\n\r\n", status.into()).into_bytes()
-}
-
-pub fn format_response_with_body(status: impl Into<String>, body: impl Into<Vec<u8>>) -> Vec<u8> {
-    let body = body.into();
-    let mut response = format!(
-        "HTTP/1.1 {}\r\nContent-Length: {}\r\n\r\n",
-        status.into(),
-        body.len()
-    ).into_bytes();
-    response.extend(body);
-
-    response
 }
