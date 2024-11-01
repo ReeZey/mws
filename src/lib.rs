@@ -33,10 +33,19 @@ impl WebServer {
     {
         let listener = TcpListener::bind(format!("{}:{}", self.host, self.port))
             .await
-            .unwrap();
+            .expect("port already in use");
+
         let verbose = self.verbose;
         loop {
-            let (stream, _addr) = listener.accept().await.unwrap();
+            let (stream, _addr) = match listener.accept().await {
+                Ok((stream, addr)) => (stream, addr),
+                Err(err) => {
+                    if verbose {
+                        eprintln!("could not accept connection:\n{:?}", err);
+                    }
+                    continue;
+                }
+            };
 
             let result = tokio::time::timeout(Duration::from_secs(60), tokio::spawn(async move {
                 let request = match handle_client(stream).await {
